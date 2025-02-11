@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mouse Activity</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        .tooltip {
+            position: absolute;
+            background-color: white;
+            border: 1px solid black;
+            padding: 5px;
+            font-size: 12px;
+            display: none;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="tooltip"></div>
+    <svg width="900" height="550"></svg>
+
+    <script>
+        const width = 900, height = 550;
+        const margin = { top: 60, right: 100, bottom: 60, left: 70 };
+
+        const svg = d3.select("svg")
+                      .attr("width", width)
+                      .attr("height", height);
+
+        const xScale = d3.scaleLinear()
+                         .domain([0, 1440])
+                         .range([margin.left, width - margin.right]);
+
+        const yScale = d3.scaleLinear()
+                         .range([height - margin.bottom, margin.top]);
+
+        // Tooltip
+        const tooltip = d3.select(".tooltip");
+
+        d3.csv("mouse_activity.csv").then(data => {
+
+            data.forEach(d => {
+                d.time = +d.time;
+                d.Female = +d.Female;
+                d.Male = +d.Male;
+            });
+
+            // Set y-axis scale based on actual values
+            yScale.domain([0, d3.max(data, d => Math.max(d.Male, d.Female))]);
+
+            // Draw X-Axis
+            svg.append("g")
+               .attr("transform", `translate(0,${height - margin.bottom})`)
+               .call(d3.axisBottom(xScale)
+                       .ticks(6)
+                       .tickFormat(d => `${Math.floor(d / 60)}h`));
+
+            // Draw Y-Axis
+            svg.append("g")
+               .attr("transform", `translate(${margin.left},0)`)
+               .call(d3.axisLeft(yScale));
+
+            // Define line generators
+            const lineMale = d3.line()
+                               .x(d => xScale(d.time))
+                               .y(d => yScale(d.Male));
+
+            const lineFemale = d3.line()
+                                 .x(d => xScale(d.time))
+                                 .y(d => yScale(d.Female));
+
+            // Draw Male Activity Line (Blue)
+            svg.append("path")
+               .datum(data)
+               .attr("fill", "none")
+               .attr("stroke", "blue")
+               .attr("stroke-width", 2)
+               .attr("d", lineMale);
+
+            // Draw Female Activity Line (Red)
+            svg.append("path")
+               .datum(data)
+               .attr("fill", "none")
+               .attr("stroke", "red")
+               .attr("stroke-width", 2)
+               .attr("d", lineFemale);
+
+            // Add Data Points (Circles) for Hover Effect
+            svg.selectAll(".dot-male")
+               .data(data)
+               .enter().append("circle")
+               .attr("class", "dot-male")
+               .attr("cx", d => xScale(d.time))
+               .attr("cy", d => yScale(d.Male))
+               .attr("r", 3)
+               .attr("fill", "blue")
+               .on("mouseover", (event, d) => showTooltip(event, d, "Male"))
+               .on("mousemove", moveTooltip)
+               .on("mouseout", hideTooltip);
+
+            svg.selectAll(".dot-female")
+               .data(data)
+               .enter().append("circle")
+               .attr("class", "dot-female")
+               .attr("cx", d => xScale(d.time))
+               .attr("cy", d => yScale(d.Female))
+               .attr("r", 3)
+               .attr("fill", "red")
+               .on("mouseover", (event, d) => showTooltip(event, d, "Female"))
+               .on("mousemove", moveTooltip)
+               .on("mouseout", hideTooltip);
+
+            // Add X-Axis Label
+            svg.append("text")
+               .attr("x", width / 2)
+               .attr("y", height - 15)
+               .attr("text-anchor", "middle")
+               .style("font-size", "14px")
+               .text("Time (Hours)");
+
+            // Add Y-Axis Label
+            svg.append("text")
+               .attr("transform", "rotate(-90)")
+               .attr("x", -height / 2)
+               .attr("y", 20)
+               .attr("text-anchor", "middle")
+               .style("font-size", "14px")
+               .text("Average Activity");
+
+            // Add Title
+            svg.append("text")
+               .attr("x", width / 2)
+               .attr("y", margin.top - 30)
+               .attr("text-anchor", "middle")
+               .style("font-size", "18px")
+               .style("font-weight", "bold")
+               .text("Male and Female Activity Over Time");
+
+            // Add Legend
+            const legend = svg.append("g")
+                              .attr("transform", `translate(${width - 100}, ${margin.top})`);
+
+            legend.append("rect")
+                  .attr("x", 0)
+                  .attr("y", 0)
+                  .attr("width", 12)
+                  .attr("height", 12)
+                  .attr("fill", "blue");
+
+            legend.append("text")
+                  .attr("x", 20)
+                  .attr("y", 10)
+                  .style("font-size", "12px")
+                  .text("Male");
+
+            legend.append("rect")
+                  .attr("x", 0)
+                  .attr("y", 20)
+                  .attr("width", 12)
+                  .attr("height", 12)
+                  .attr("fill", "red");
+
+            legend.append("text")
+                  .attr("x", 20)
+                  .attr("y", 30)
+                  .style("font-size", "12px")
+                  .text("Female");
+
+        }).catch(error => console.error("Error loading data:", error));
+
+        // Tooltip Functions
+        function showTooltip(event, d, gender) {
+            tooltip.style("display", "block")
+                   .html(`Time: ${Math.floor(d.time / 60)}h<br>${gender}: ${gender === "Male" ? d.Male : d.Female}`);
+        }
+
+        function moveTooltip(event) {
+            tooltip.style("left", (event.pageX + 10) + "px")
+                   .style("top", (event.pageY - 20) + "px");
+        }
+
+        function hideTooltip() {
+            tooltip.style("display", "none");
+        }
+    </script>
+</body>
+</html>
