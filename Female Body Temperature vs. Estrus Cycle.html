@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Female Body Temperature vs Estrus Cycle</title>
+  <script src="https://d3js.org/d3.v5.min.js"></script>
+  <style>
+    .tooltip {
+      position: absolute;
+      text-align: center;
+      padding: 5px;
+      background: lightsteelblue;
+      border: 1px solid #333;
+      border-radius: 5px;
+      pointer-events: none;
+      opacity: 0;
+      font-family: sans-serif;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div id="chart"></div>
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      d3.json('formatted_fem_temp.json').then(function(data) {
+        var femaleData = data.filter(d => d["Mouse ID"].charAt(0).toLowerCase() === 'f');
+        femaleData.forEach(d => {
+          d.minuteNum = +d.Minute.replace("Minute ", "");
+        });
+        var cycleLength = 5760;
+        femaleData.forEach(d => {
+          d.cycleMinute = ((d.minuteNum - 1440) % cycleLength + cycleLength) % cycleLength;
+        });
+        var binWidth = 10;
+        var binnedData = d3.nest()
+          .key(function(d) { 
+            return Math.floor(d.cycleMinute / binWidth) * binWidth; 
+          })
+          .rollup(function(values) {
+            return d3.mean(values, function(d) { return d.Temperature; });
+          })
+          .entries(femaleData)
+          .map(function(d) {
+            return { cycleMinute: +d.key, avgTemp: d.value };
+          })
+          .sort(function(a, b) { return a.cycleMinute - b.cycleMinute; });
+        var margin = { top: 20, right: 20, bottom: 50, left: 60 },
+            width  = 1000 - margin.left - margin.right,
+            height = 500  - margin.top - margin.bottom;
+        var svg = d3.select("#chart")
+          .append("svg")
+          .attr("width", width + margin.left + margin.right)
+          .attr("height", height + margin.top + margin.bottom)
+          .append("g")
+          .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+        var x = d3.scaleLinear()
+          .domain([0, cycleLength])
+          .range([0, width]);
+        var yExtent = d3.extent(binnedData, d => d.avgTemp);
+        var yPadding = (yExtent[1] - yExtent[0]) * 0.1;
+        var y = d3.scaleLinear()
+          .domain([yExtent[0] - yPadding, yExtent[1] + yPadding])
+          .range([height, 0]);
+        var xAxis = d3.axisBottom(x).ticks(10)
+          .tickFormat(function(d) {
+            var totalMinutes = d;
+            var day = Math.floor(totalMinutes / 1440) + 1;
+            var minutesIntoDay = totalMinutes % 1440;
+            var hours = Math.floor(minutesIntoDay / 60);
+            var minutes = minutesIntoDay % 60;
+            return "Day " + day + " " + hours + ":" + (minutes < 10 ? "0" + minutes : minutes);
+          });
+        svg.append("g")
+          .attr("transform", "translate(0," + height + ")")
+          .call(xAxis)
+          .append("text")
+          .attr("fill", "#000")
+          .attr("x", width/2)
+          .attr("y", 40)
+          .attr("text-anchor", "middle")
+          .text("Estrus Cycle Time");
+        var yAxis = d3.axisLeft(y);
+        svg.append("g")
+          .call(yAxis)
+          .append("text")
+          .attr("fill", "#000")
+          .attr("transform", "rotate(-90)")
+          .attr("y", -50)
+          .attr("x", -height/2)
+          .attr("dy", "0.71em")
+          .attr("text-anchor", "middle")
+          .text("Average Body Temperature (°C)");
+        var line = d3.line()
+          .x(function(d) { return x(d.cycleMinute); })
+          .y(function(d) { return y(d.avgTemp); });
+        svg.append("path")
+          .datum(binnedData)
+          .attr("fill", "none")
+          .attr("stroke", "steelblue")
+          .attr("stroke-width", 2)
+          .attr("d", line);
+        var overlay = svg.append("rect")
+          .attr("width", width)
+          .attr("height", height)
+          .attr("fill", "none")
+          .attr("pointer-events", "all");
+        var tooltip = d3.select("body").append("div")
+          .attr("class", "tooltip");
+        var focusCircle = svg.append("circle")
+          .attr("r", 4)
+          .attr("fill", "red")
+          .style("display", "none");
+        var bisect = d3.bisector(function(d) { return d.cycleMinute; }).left;
+        overlay.on("mousemove", function() {
+          var mouseX = d3.mouse(this)[0];
+          var cycleTime = x.invert(mouseX);
+          var i = bisect(binnedData, cycleTime);
+          var d0 = binnedData[i - 1];
+          var d1 = binnedData[i];
+          var dNearest = d0;
+          if (d1 && (cycleTime - d0.cycleMinute > d1.cycleMinute - cycleTime)) {
+            dNearest = d1;
+          }
+          focusCircle.attr("cx", x(dNearest.cycleMinute))
+            .attr("cy", y(dNearest.avgTemp))
+            .style("display", null);
+          tooltip.style("opacity", 1)
+            .html("Cycle Time: " + Math.round(dNearest.cycleMinute) + " min<br>" +
+                  "Avg Temp: " + dNearest.avgTemp.toFixed(2) + "°C")
+            .style("left", (d3.event.pageX + 10) + "px")
+            .style("top", (d3.event.pageY - 25) + "px");
+        })
+        .on("mouseout", function() {
+          focusCircle.style("display", "none");
+          tooltip.style("opacity", 0);
+        });
+      }).catch(function(error) {
+        console.error('Error loading JSON data:', error);
+      });
+    });
+  </script>
+</body>
+</html>

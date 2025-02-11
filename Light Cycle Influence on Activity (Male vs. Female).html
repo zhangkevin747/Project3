@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Light Cycle Influence on Activity (Male vs. Female)k</title>
+  <script src="https://d3js.org/d3.v5.min.js"></script>
+  <style>
+    .axis line,
+    .axis path {
+      stroke: #000;
+    }
+    .tooltip {
+      position: absolute;
+      text-align: center;
+      padding: 5px;
+      background: lightsteelblue;
+      border: 1px solid #333;
+      border-radius: 5px;
+      pointer-events: none;
+      opacity: 0;
+      font-family: sans-serif;
+      font-size: 12px;
+    }
+    #controls {
+      margin-bottom: 20px;
+    }
+    #controls label {
+      margin-right: 10px;
+    }
+    #detailedChart {
+      display: none;
+      border: 1px solid #ccc;
+      padding: 10px;
+      margin-top: 20px;
+      background: #f9f9f9;
+    }
+    #detailedChart button {
+      float: right;
+    }
+    #resetZoom {
+      margin-top: 10px;
+    }
+    .brush-label {
+      font-size: 12px;
+      fill: darkred;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <label>
+      Bandwidth: 
+      <input type="range" id="bandwidthSlider" min="1" max="20" value="7" step="0.5">
+      <span id="bandwidthValue">7</span>
+    </label>
+    <br>
+    <label>
+      View Mode: 
+      <select id="viewMode">
+        <option value="violin" selected>Violin</option>
+        <option value="histogram">Histogram</option>
+      </select>
+    </label>
+    <br>
+    <label><input type="checkbox" id="toggleFemaleDark" checked> Female Dark</label>
+    <label><input type="checkbox" id="toggleFemaleLight" checked> Female Light</label>
+    <label><input type="checkbox" id="toggleMaleDark" checked> Male Dark</label>
+    <label><input type="checkbox" id="toggleMaleLight" checked> Male Light</label>
+    <br>
+    <button id="resetZoom">Reset Zoom</button>
+  </div>
+  <div id="chartContainer"></div>
+  
+  <div id="detailedChart">
+    <button id="closeDetailed">Close</button>
+    <h3 id="detailedTitle"></h3>
+    <div id="detailedContent"></div>
+  </div>
+
+  <div class="tooltip"></div>
+
+  <script>
+    function kernelDensityEstimator(kernel, X) {
+      return function(V) {
+        return X.map(function(x) {
+          return { x: x, y: d3.mean(V, function(v) { return kernel(x - v); }) };
+        });
+      };
+    }
+    
+    function kernelEpanechnikov(bandwidth) {
+      return function(u) {
+        u = u / bandwidth;
+        return Math.abs(u) <= 1 ? 0.75 * (1 - u * u) / bandwidth : 0;
+      };
+    }
+    
+    let groupedData, activityExtent;
+    
+    Promise.all([
+      d3.json("formatted_fem_act.json"),
+      d3.json("formatted_male_act.json")
+    ]).then(function(files) {
+      let femaleData = files[0];
+      let maleData = files[1];
+      
+      femaleData.forEach(d => {
+        d.sex = "Female";
+        d.minuteNum = +d.Minute.replace("Minute ", "");
+        d.period = (d.minuteNum % 1440 < 720) ? "dark" : "light";
+        d.Activity = +d.Activity;
+      });
+      maleData.forEach(d => {
+        d.sex = "Male";
+        d.minuteNum = +d.Minute.replace("Minute ", "");
+        d.period = (d.minuteNum % 1440 < 720) ? "dark" : "light";
+        d.Activity = +d.Activity;
+      });
+      
+      let data = femaleData.concat(maleData);
+      groupedData = { 
+        "Female": { "dark": [], "light": [] },
+        "Male": { "dark": [], "light": [] }
+      };
+      data.forEach(d => {
+        if (d.sex && d.period) {
+          groupedData[d.sex][d.period].push(d.Activity);
+        }
+      });
+      activityExtent = d3.extent(data, d => d.Activity);
+      
+      drawChart();
+      
+      d3.select("#bandwidthSlider").on("input", function() {
+        d3.select("#bandwidthValue").text(this.value);
+        drawChart();
+      });
+      d3.select("#viewMode").on("change", drawChart);
+      d3.selectAll("#toggleFemaleDark, #toggleFemaleLight, #toggleMaleDark, #toggleMaleLight")
+        .on("change", drawChart);
+      
+    }).catch(function(error) {
+      console.error("Error loading JSON files:", error);
+    });
+    
+    function drawChart() {
+      d3.select("#chartContainer").select("svg").remove();
+      
+      let bandwidth = +d3.select("#bandwidthSlider").property("value");
+      let viewMode = d3.select("#viewMode").property("value");
+      let showFemaleDark = d3.select("#toggleFemaleDark").property("checked");
+      let showFemaleLight = d3.select("#toggleFemaleLight").property("checked");
+      let showMaleDark = d3.select("#toggleMaleDark").property("checked");
+      let showMaleLight = d3.select("#toggleMaleLight").property("checked");
+      
+      const margin = { top: 40, right: 30, bottom: 40, left: 50 },
+            width = 1000 - margin.left - margin.right,
+            height = 500 - margin.top - margin.bottom;
+      
+      const svg = d3.select("#chartContainer")
+        .append("svg")
+        .attr("width", width + margin.left + margin.right)
+        .attr("height", height + margin.top + margin.bottom);
+      
+      const g = svg.append("g")
+                   .attr("transform", `translate(${margin.left},${margin.top})`);
+      
+      const zoomGroup = g.append("g")
+                         .attr("class", "zoomGroup");
+      
+      const zoom = d3.zoom()
+                      .scaleExtent([1, 10])
+                      .wheelDelta(function() { return -d3.event.deltaY * 0.002; })
+                      .on("zoom", function() {
+                        zoomGroup.attr("transform", d3.event.transform);
+                      });
+      svg.call(zoom);
+      
+      d3.select("#resetZoom").on("click", function() {
+        svg.transition().duration(750).call(zoom.transform, d3.zoomIdentity);
+      });
+      
+      const sexes = ["Female", "Male"];
+      const panelWidth = width / sexes.length;
+      
+      const y = d3.scaleLinear()
+        .domain([activityExtent[0], activityExtent[1]])
+        .range([height, 0])
+        .nice();
+      
+      const periods = ["dark", "light"];
+      const xBand = d3.scaleBand()
+        .domain(periods)
+        .range([0, panelWidth])
+        .padding(0.2);
+      
+      const maxViolinWidth = xBand.bandwidth() / 2;
+      const xNum = d3.scaleLinear().range([0, maxViolinWidth]);
+      
+      const tooltip = d3.select(".tooltip");
+      
+      sexes.forEach(function(sex, i) {
+        const panel = zoomGroup.append("g")
+          .attr("transform", `translate(${i * panelWidth}, 0)`);
+        
+        panel.append("text")
+          .attr("x", panelWidth / 2)
+          .attr("y", -10)
+          .attr("text-anchor", "middle")
+          .style("font-size", "16px")
+          .text(sex);
+        
+        if (i === 0) {
+          panel.append("g")
+            .attr("class", "axis")
+            .call(d3.axisLeft(y));
+        } else {
+          panel.append("g")
+            .attr("class", "axis")
+            .attr("transform", `translate(${xBand(periods[0])},0)`)
+            .call(d3.axisLeft(y).ticks(0));
+        }
+        
+        panel.append("text")
+          .attr("x", panelWidth / 2)
+          .attr("y", height + margin.bottom - 5)
+          .attr("text-anchor", "middle")
+          .style("font-size", "14px")
+          .text("Period (Dark vs. Light)");
+        
+        periods.forEach(function(period) {
+          let drawGroup = false;
+          if (sex === "Female" && period === "dark" && showFemaleDark) drawGroup = true;
+          if (sex === "Female" && period === "light" && showFemaleLight) drawGroup = true;
+          if (sex === "Male" && period === "dark" && showMaleDark) drawGroup = true;
+          if (sex === "Male" && period === "light" && showMaleLight) drawGroup = true;
+          if (!drawGroup) return;
+          
+          const activityValues = groupedData[sex][period];
+          if (activityValues.length === 0) return;
+          
+          const dataGroup = panel.append("g")
+            .attr("class", "dataGroup")
+            .attr("data-key", sex + "_" + period);
+          
+          const center = xBand(period) + xBand.bandwidth() / 2;
+          
+          if (viewMode === "violin") {
+            const kde = kernelDensityEstimator(kernelEpanechnikov(bandwidth), y.ticks(40));
+            const density = kde(activityValues);
+            xNum.domain([0, d3.max(density, d => d.y)]);
+            
+            dataGroup.append("path")
+              .datum(density)
+              .attr("fill", period === "dark" ? "#1f77b4" : "#ff7f0e")
+              .attr("stroke", "none")
+              .attr("opacity", 0.7)
+              .attr("d", d3.area()
+                      .curve(d3.curveCatmullRom)
+                      .x0(d => center)
+                      .x1(d => center + xNum(d.y))
+                      .y(d => y(d.x))
+              );
+            
+            dataGroup.append("path")
+              .datum(density)
+              .attr("fill", period === "dark" ? "#1f77b4" : "#ff7f0e")
+              .attr("stroke", "none")
+              .attr("opacity", 0.7)
+              .attr("d", d3.area()
+                      .curve(d3.curveCatmullRom)
+                      .x0(d => center)
+                      .x1(d => center - xNum(d.y))
+                      .y(d => y(d.x))
+              );
+          } else if (viewMode === "histogram") {
+            const histogramGenerator = d3.histogram()
+                                         .domain(y.domain())
+                                         .thresholds(y.ticks(20));
+            const bins = histogramGenerator(activityValues);
+            const maxCount = d3.max(bins, d => d.length);
+            const xBar = d3.scaleLinear().domain([0, maxCount]).range([0, maxViolinWidth]);
+            
+            dataGroup.selectAll("rect")
+              .data(bins)
+              .enter()
+              .append("rect")
+              .attr("x", d => center - xBar(d.length))
+              .attr("y", d => y(d.x1))
+              .attr("width", d => 2 * xBar(d.length))
+              .attr("height", d => y(d.x0) - y(d.x1))
+              .attr("fill", period === "dark" ? "#1f77b4" : "#ff7f0e")
+              .attr("opacity", 0.7);
+          }
+          
+          dataGroup.on("mouseover", function() {
+              tooltip.transition().duration(200).style("opacity", 0.9);
+              tooltip.html("Sex: " + sex + "<br/>Period: " + period +
+                           "<br/>Mean Activity: " + d3.mean(activityValues).toFixed(2))
+                .style("left", (d3.event.pageX + 5) + "px")
+                .style("top", (d3.event.pageY - 28) + "px");
+              d3.select(this).selectAll("path, rect")
+                .attr("stroke", "black")
+                .attr("stroke-width", 2);
+          })
+          .on("mousemove", function() {
+              tooltip.style("left", (d3.event.pageX + 5) + "px")
+                     .style("top", (d3.event.pageY - 28) + "px");
+          })
+          .on("mouseout", function() {
+              tooltip.transition().duration(500).style("opacity", 0);
+              d3.select(this).selectAll("path, rect")
+                .attr("stroke", "none");
+          })
+          .on("dblclick", function() {
+              showDetailedView(sex, period, activityValues, bandwidth);
+          });
+          
+          const brush = d3.brushY()
+                          .extent([[0, 0], [panelWidth, height]])
+                          .on("brush", brushed)
+                          .on("end", brushended);
+          panel.append("g")
+            .attr("class", "brush")
+            .call(brush);
+          
+          function brushed() {
+            const selection = d3.event.selection;
+            if (selection == null) return;
+            const [y0, y1] = selection;
+            const range = [y.invert(y1), y.invert(y0)];
+            const count = activityValues.filter(d => d >= range[0] && d <= range[1]).length;
+            panel.selectAll(".brush-label").remove();
+            panel.append("text")
+              .attr("class", "brush-label")
+              .attr("x", panelWidth - 5)
+              .attr("y", y(range[1]) - 5)
+              .attr("text-anchor", "end")
+              .text("Count: " + count);
+          }
+          function brushended() {
+            if (!d3.event.selection) {
+              panel.selectAll(".brush-label").remove();
+            }
+          }
+        });
+      });
+      
+      svg.append("text")
+         .attr("transform", "rotate(-90)")
+         .attr("x", -height / 2)
+         .attr("y", -margin.left + 15)
+         .attr("text-anchor", "middle")
+         .style("font-size", "14px")
+         .text("Activity");
+    }
+    
+    function showDetailedView(sex, period, activityValues, bandwidth) {
+      d3.select("#detailedChart").style("display", "block");
+      d3.select("#detailedTitle").text(sex + " " + period + " (Detailed View)");
+      d3.select("#detailedContent").select("svg").remove();
+      
+      const margin = { top: 40, right: 30, bottom: 40, left: 50 },
+            width = 600 - margin.left - margin.right,
+            height = 400 - margin.top - margin.bottom;
+      
+      const svg = d3.select("#detailedContent")
+        .append("svg")
+        .attr("width", width + margin.left + margin.right)
+        .attr("height", height + margin.top + margin.bottom)
+        .append("g")
+        .attr("transform", `translate(${margin.left},${margin.top})`);
+      
+      const y = d3.scaleLinear()
+        .domain([activityExtent[0], activityExtent[1]])
+        .range([height, 0])
+        .nice();
+      
+      const kde = kernelDensityEstimator(kernelEpanechnikov(bandwidth), y.ticks(40));
+      const density = kde(activityValues);
+      const xNum = d3.scaleLinear()
+        .domain([0, d3.max(density, d => d.y)])
+        .range([0, width]);
+      
+      svg.append("g")
+         .attr("class", "axis")
+         .call(d3.axisLeft(y));
+      
+      svg.append("g")
+         .attr("class", "axis")
+         .attr("transform", `translate(0,${height})`)
+         .call(d3.axisBottom(xNum).ticks(5));
+      
+      const line = d3.line()
+        .curve(d3.curveCatmullRom)
+        .x(d => xNum(d.y))
+        .y(d => y(d.x));
+      
+      svg.append("path")
+         .datum(density)
+         .attr("fill", "none")
+         .attr("stroke", "#555")
+         .attr("stroke-width", 2)
+         .attr("d", line);
+      
+      const tooltip = d3.select(".tooltip");
+      svg.append("rect")
+         .attr("width", width)
+         .attr("height", height)
+         .attr("fill", "none")
+         .attr("pointer-events", "all")
+         .on("mousemove", function() {
+            const mouse = d3.mouse(this);
+            const densityVal = xNum.invert(mouse[0]);
+            const bisect = d3.bisector(d => d.y).left;
+            const idx = bisect(density, densityVal);
+            const d0 = density[idx - 1],
+                  d1 = density[idx],
+                  dClosest = (!d0 || (d1 && (densityVal - d0.y > d1.y - densityVal))) ? d1 : d0;
+            tooltip.transition().duration(100).style("opacity", 0.9);
+            tooltip.html("Density: " + dClosest.y.toFixed(3) + "<br/>Activity: " + dClosest.x.toFixed(2))
+              .style("left", (d3.event.pageX + 5) + "px")
+              .style("top", (d3.event.pageY - 28) + "px");
+         })
+         .on("mouseout", function() {
+            tooltip.transition().duration(500).style("opacity", 0);
+         });
+    }
+    
+    d3.select("#closeDetailed").on("click", function() {
+      d3.select("#detailedChart").style("display", "none");
+    });
+  </script>
+</body>
+</html>
