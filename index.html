@@ -1,41 +1,568 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Project 3</title>
-    <link rel="stylesheet" href="./styles.css">
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    
+  <meta charset="UTF-8" />
+  <title>Project 3</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="https://d3js.org/d3.v5.min.js"></script>
+  <style>
+    body { font-family: sans-serif; }
+    #controls { margin: 10px 0; }
+    #controls label { margin-right: 20px; }
+    #cycleControls { margin: 10px 0; }
+    button { margin-left: 20px; }
+    .brush .selection {
+      fill: #777;
+      fill-opacity: 0.3;
+      stroke: #fff;
+      shape-rendering: crispEdges;
+    }
+  </style>
 </head>
 <body>
-    
     <h1>Project 3</h1>
 
-    <svg>
-        <style>
-            .cell {
-                stroke: #ccc;
+    <div id="controls">
+        <label><input type="checkbox" id="showTemp" checked> Show Temperature</label>
+        <label><input type="checkbox" id="showAct" checked> Show Activity</label>
+        <label><input type="checkbox" id="female" checked> Female</label>
+        <label><input type="checkbox" id="male" checked> Male</label>
+        <button id="resetZoom">Reset Zoom</button>
+      </div>
+      
+      <div id="cycleControls">
+        <label for="cycleSelect"><strong>Select Estrus Cycle:</strong></label>
+        <select id="cycleSelect"></select>
+      </div>
+      
+      <div id="chart"></div>
+      <div id="correlationResults" style="margin-top:10px; font-weight:bold;"></div>
+      
+      <script>
+      document.addEventListener("DOMContentLoaded", function() {
+        // Load the four JSON files.
+        Promise.all([
+          d3.json('formatted_fem_temp.json'),
+          d3.json('formatted_fem_act.json'),
+          d3.json('formatted_male_temp.json'),
+          d3.json('formatted_male_act.json')
+        ]).then(function(files) {
+          // Assign datasets.
+          var femTempData  = files[0],
+              femActData   = files[1],
+              maleTempData = files[2],
+              maleActData  = files[3];
+          
+          // Settings.
+          var cycleLength = 5760,   // 4 days in minutes
+              binWidth    = 10;     // 10‑minute bins
+          
+          // 1) Extract minuteNum from "Minute X"
+          // 2) Compute cycleNum by absolute minute / cycleLength
+          [femTempData, femActData, maleTempData, maleActData].forEach(function(dataset) {
+            dataset.forEach(function(d) {
+              d.minuteNum = +d.Minute.replace("Minute ", "");
+              d.cycleNum  = Math.floor(d.minuteNum / cycleLength) + 1;
+            });
+          });
+          
+          // Unique cycle numbers.
+          var cycles = Array.from(new Set(femTempData.map(d => d.cycleNum))).sort((a,b) => a-b);
+          
+          // Populate the cycle dropdown
+          var cycleSelect = d3.select("#cycleSelect");
+          cycleSelect.append("option")
+            .attr("value", "All")
+            .text("All Cycles");
+          cycles.forEach(function(cycle) {
+            cycleSelect.append("option")
+              .attr("value", cycle)
+              .text("Cycle " + cycle);
+          });
+          
+          // ---------- BIN DATA (absolute minute) ----------
+          function binData(data, valueKey, selectedCycle) {
+            // Filter by chosen cycle
+            var filtered;
+            if (selectedCycle === "All") {
+              filtered = data; // all cycles
+            } else {
+              var cycleInt = +selectedCycle;
+              filtered = data.filter(d => d.cycleNum === cycleInt);
             }
-    
-            .cell text {
-                font-size: 10px;
-                fill: #fff;
-                text-anchor: middle;
+            // Group into 10‑minute bins by minuteNum
+            var binned = d3.nest()
+              .key(function(d) { return Math.floor(d.minuteNum / binWidth) * binWidth; })
+              .rollup(function(values) {
+                return d3.mean(values, function(d) { return d[valueKey]; });
+              })
+              .entries(filtered)
+              .map(function(d) {
+                return {
+                  binAbs: +d.key, // absolute start minute of bin
+                  avg: d.value
+                };
+              })
+              .sort(function(a,b) { return a.binAbs - b.binAbs; });
+            return binned;
+          }
+          
+          var binnedFemTemp, binnedFemAct, binnedMaleTemp, binnedMaleAct;
+          function updateBinnedData(selectedCycle) {
+            binnedFemTemp  = binData(femTempData,  "Temperature", selectedCycle);
+            binnedFemAct   = binData(femActData,   "Activity",    selectedCycle);
+            binnedMaleTemp = binData(maleTempData, "Temperature", selectedCycle);
+            binnedMaleAct  = binData(maleActData,  "Activity",    selectedCycle);
+          }
+          
+          // Initialize
+          var selectedCycle = cycleSelect.property("value");
+          updateBinnedData(selectedCycle);
+          
+          // Chart dimensions
+          var margin = { top: 60, right: 80, bottom: 140, left: 80 },
+              width  = 1000 - margin.left - margin.right,
+              height = 500  - margin.top  - margin.bottom;
+          
+          var xScaleOriginal = d3.scaleLinear().range([0, width]);
+          var currentX       = xScaleOriginal.copy();
+          
+          var yTemp = d3.scaleLinear().range([height, 0]);
+          var yAct  = d3.scaleLinear().range([height, 0]);
+          
+          var svg = d3.select("#chart")
+            .append("svg")
+            .attr("width",  width  + margin.left + margin.right)
+            .attr("height", height + margin.top  + margin.bottom)
+            .append("g")
+            .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+          
+          // Title
+          svg.append("text")
+            .attr("x", width/2)
+            .attr("y", -20)
+            .attr("text-anchor", "middle")
+            .style("font-size", "18px")
+            .style("font-weight", "bold")
+            .text("Estrus Cycle Activity & Temperature Analysis");
+          
+          // Clip path
+          svg.append("defs").append("clipPath")
+            .attr("id", "clip")
+            .append("rect")
+            .attr("width", width)
+            .attr("height", height);
+          
+          var highlightGroup = svg.append("g").attr("clip-path", "url(#clip)");
+          var linesGroup     = svg.append("g").attr("clip-path", "url(#clip)");
+          
+          var xAxisG = svg.append("g")
+            .attr("class", "x-axis")
+            .attr("transform", "translate(0," + height + ")");
+          var yAxisLeftG = svg.append("g").attr("class", "y-axis-left");
+          var yAxisRightG= svg.append("g").attr("class", "y-axis-right")
+            .attr("transform", "translate(" + width + ",0)");
+          
+          // Format ticks: convert absolute minutes to Day X HH:MM
+          function formatTick(d) {
+            var day = Math.floor(d / 1440) + 1;
+            var minutesIntoDay = d % 1440;
+            var hours = Math.floor(minutesIntoDay / 60);
+            var mins  = minutesIntoDay % 60;
+            return "Day " + day + " " + hours + ":" + (mins<10 ? "0"+mins : mins);
+          }
+          var xAxis = d3.axisBottom(currentX).ticks(10).tickFormat(formatTick);
+          xAxisG.call(xAxis);
+          
+          // X-axis label
+          svg.append("text")
+            .attr("transform", "translate(" + (width/2) + " ," + (height + margin.bottom - 90) + ")")
+            .style("text-anchor", "middle")
+            .style("font-weight", "bold")
+            .text("Experiment Time (Days:Hours)");
+          
+          // Y-axis labels
+          svg.append("text")
+            .attr("transform", "rotate(-90)")
+            .attr("y", -margin.left + 20)
+            .attr("x", -height/2)
+            .style("text-anchor", "middle")
+            .style("font-weight", "bold")
+            .text("Temperature (°C)");
+          
+          svg.append("text")
+            .attr("transform", "translate(" + (width + margin.right/2) + "," + (height/2) + ") rotate(90)")
+            .style("text-anchor", "middle")
+            .style("font-weight", "bold")
+            .text("Activity");
+          
+          // Colors
+          var femaleColor = "red",
+              maleColor   = "blue";
+          
+          // Paths
+          var femaleTempPath = linesGroup.append("path")
+            .attr("fill", "none")
+            .attr("stroke", femaleColor)
+            .attr("stroke-width", 2);
+          var maleTempPath = linesGroup.append("path")
+            .attr("fill", "none")
+            .attr("stroke", maleColor)
+            .attr("stroke-width", 2);
+          var femaleActPath = linesGroup.append("path")
+            .attr("fill", "none")
+            .attr("stroke", femaleColor)
+            .attr("stroke-width", 2)
+            .attr("stroke-dasharray", "4,4");
+          var maleActPath = linesGroup.append("path")
+            .attr("fill", "none")
+            .attr("stroke", maleColor)
+            .attr("stroke-width", 2)
+            .attr("stroke-dasharray", "4,4");
+          
+          // Legend (top-right)
+          var legend = svg.append("g")
+            .attr("class", "legend")
+            .attr("transform", "translate(" + (width - 150) + ",10)");
+          legend.append("rect")
+            .attr("width", 150)
+            .attr("height", 70)
+            .attr("fill", "white")
+            .attr("stroke", "black");
+          legend.append("line")
+            .attr("x1", 10)
+            .attr("y1", 20)
+            .attr("x2", 40)
+            .attr("y2", 20)
+            .attr("stroke", femaleColor)
+            .attr("stroke-width", 2);
+          legend.append("text")
+            .attr("x", 50)
+            .attr("y", 25)
+            .text("Female")
+            .attr("alignment-baseline", "middle");
+          legend.append("line")
+            .attr("x1", 10)
+            .attr("y1", 40)
+            .attr("x2", 40)
+            .attr("y2", 40)
+            .attr("stroke", maleColor)
+            .attr("stroke-width", 2);
+          legend.append("text")
+            .attr("x", 50)
+            .attr("y", 45)
+            .text("Male")
+            .attr("alignment-baseline", "middle");
+          legend.append("text")
+            .attr("x", 10)
+            .attr("y", 60)
+            .text("Solid: Temp, Dashed: Act")
+            .attr("font-size", "10px");
+          
+          // Bottom legend for lights
+          var bottomLegend = svg.append("g")
+            .attr("class", "bottom-legend")
+            .attr("transform", "translate(" + (width/2 - 100) + "," + (height + margin.bottom - 70) + ")");
+          bottomLegend.append("rect")
+            .attr("x", 0)
+            .attr("y", 0)
+            .attr("width", 20)
+            .attr("height", 20)
+            .attr("fill", "rgba(0,0,0,0.05)")
+            .attr("stroke", "black");
+          bottomLegend.append("text")
+            .attr("x", 25)
+            .attr("y", 15)
+            .text("Lights Off")
+            .style("font-size", "12px");
+          bottomLegend.append("rect")
+            .attr("x", 100)
+            .attr("y", 0)
+            .attr("width", 20)
+            .attr("height", 20)
+            .attr("fill", "white")
+            .attr("stroke", "black");
+          bottomLegend.append("text")
+            .attr("x", 125)
+            .attr("y", 15)
+            .text("Lights On")
+            .style("font-size", "12px");
+          
+          // The day intervals for a single cycle (4 days).
+          // 12h off, 12h on, repeated => total 5760 min
+          var dayIntervals = [
+            { start: 0,    end: 720,   lights: "off" },
+            { start: 720,  end: 1440,  lights: "on"  },
+            { start: 1440, end: 2160,  lights: "off" },
+            { start: 2160, end: 2880,  lights: "on"  },
+            { start: 2880, end: 3600,  lights: "off" },
+            { start: 3600, end: 4320,  lights: "on"  },
+            { start: 4320, end: 5040,  lights: "off" },
+            { start: 5040, end: 5760,  lights: "on"  }
+          ];
+          
+          // Checkboxes
+          var showTempCheckbox = d3.select("#showTemp"),
+              showActCheckbox  = d3.select("#showAct"),
+              femaleCheckbox   = d3.select("#female"),
+              maleCheckbox     = d3.select("#male");
+          
+          // Current arrays
+          var currentFemaleTempData = [],
+              currentMaleTempData   = [],
+              currentFemaleActData  = [],
+              currentMaleActData    = [];
+          
+          // Shading for lights off/on
+          function updateBackground() {
+            var selVal = cycleSelect.property("value");
+            var bgData = [];
+            
+            // For "All," replicate dayIntervals for each cycle
+            if (selVal === "All") {
+              cycles.forEach(function(c) {
+                dayIntervals.forEach(function(interval) {
+                  bgData.push({
+                    start: (c-1)*cycleLength + interval.start,
+                    end:   (c-1)*cycleLength + interval.end,
+                    lights: interval.lights
+                  });
+                });
+              });
+            } else {
+              // For single cycle
+              var c = +selVal;
+              dayIntervals.forEach(function(interval) {
+                bgData.push({
+                  start: (c-1)*cycleLength + interval.start,
+                  end:   (c-1)*cycleLength + interval.end,
+                  lights: interval.lights
+                });
+              });
             }
-    
-            .axis text {
-                font-size: 12px;
+            
+            var rects = highlightGroup.selectAll("rect.background")
+              .data(bgData, function(d) { return d.start; });
+            
+            rects.enter()
+              .append("rect")
+              .attr("class", "background")
+              .merge(rects)
+              .attr("x", function(d) { return currentX(d.start); })
+              .attr("width", function(d) {
+                return currentX(d.end) - currentX(d.start);
+              })
+              .attr("y", 0)
+              .attr("height", height)
+              .attr("fill", function(d) {
+                return d.lights === "off" ? "rgba(0,0,0,0.05)" : "rgba(255,255,255,0)";
+              });
+            
+            rects.exit().remove();
+          }
+          
+          // Update chart
+          function updateChart() {
+            var selVal = cycleSelect.property("value");
+            updateBinnedData(selVal);
+            
+            // Filter lines
+            currentFemaleTempData = (showTempCheckbox.property("checked") && femaleCheckbox.property("checked")) 
+                                      ? binnedFemTemp : [];
+            currentMaleTempData   = (showTempCheckbox.property("checked") && maleCheckbox.property("checked")) 
+                                      ? binnedMaleTemp : [];
+            currentFemaleActData  = (showActCheckbox.property("checked") && femaleCheckbox.property("checked")) 
+                                      ? binnedFemAct : [];
+            currentMaleActData    = (showActCheckbox.property("checked") && maleCheckbox.property("checked")) 
+                                      ? binnedMaleAct : [];
+            
+            // X-domain
+            if (selVal === "All") {
+              var maxCycle = d3.max(cycles);
+              xScaleOriginal.domain([0, maxCycle * cycleLength]);
+            } else {
+              var c = +selVal;
+              xScaleOriginal.domain([ (c-1)*cycleLength, c*cycleLength ]);
             }
-        </style>
-    </svg>
-    
-    <script src="script.js"></script>
+            currentX = xScaleOriginal.copy();
+            xAxisG.transition().duration(750).call(xAxis.scale(currentX));
+            
+            // Y scale for Temp
+            var tempVals = [];
+            if (currentFemaleTempData.length) tempVals = tempVals.concat(currentFemaleTempData.map(d => d.avg));
+            if (currentMaleTempData.length)   tempVals = tempVals.concat(currentMaleTempData.map(d => d.avg));
+            if (!tempVals.length) tempVals = [36,39];
+            var tempExtent = d3.extent(tempVals),
+                tempPad    = (tempExtent[1] - tempExtent[0]) * 0.1;
+            yTemp.domain([tempExtent[0] - tempPad, tempExtent[1] + tempPad]);
+            
+            // Y scale for Activity
+            var actVals = [];
+            if (currentFemaleActData.length) actVals = actVals.concat(currentFemaleActData.map(d => d.avg));
+            if (currentMaleActData.length)   actVals = actVals.concat(currentMaleActData.map(d => d.avg));
+            if (!actVals.length) actVals = [0,70];
+            var actExtent = d3.extent(actVals),
+                actPad    = (actExtent[1] - actExtent[0]) * 0.1;
+            yAct.domain([actExtent[0] - actPad, actExtent[1] + actPad]);
+            
+            yAxisLeftG.transition().duration(750).call(d3.axisLeft(yTemp));
+            yAxisRightG.transition().duration(750).call(d3.axisRight(yAct));
+            
+            updateLines();
+            updateBackground();
+          }
+          
+          // Redraw lines
+          function updateLines() {
+            function lineGenX(d) { return currentX(d.binAbs); }
+            
+            // Female Temp
+            if (currentFemaleTempData.length) {
+              femaleTempPath.transition().duration(750)
+                .attr("d", d3.line()
+                  .x(lineGenX)
+                  .y(d => yTemp(d.avg))
+                  (currentFemaleTempData))
+                .style("opacity", 1);
+            } else {
+              femaleTempPath.transition().duration(750).style("opacity", 0);
+            }
+            
+            // Male Temp
+            if (currentMaleTempData.length) {
+              maleTempPath.transition().duration(750)
+                .attr("d", d3.line()
+                  .x(lineGenX)
+                  .y(d => yTemp(d.avg))
+                  (currentMaleTempData))
+                .style("opacity", 1);
+            } else {
+              maleTempPath.transition().duration(750).style("opacity", 0);
+            }
+            
+            // Female Act
+            if (currentFemaleActData.length) {
+              femaleActPath.transition().duration(750)
+                .attr("d", d3.line()
+                  .x(lineGenX)
+                  .y(d => yAct(d.avg))
+                  (currentFemaleActData))
+                .style("opacity", 1);
+            } else {
+              femaleActPath.transition().duration(750).style("opacity", 0);
+            }
+            
+            // Male Act
+            if (currentMaleActData.length) {
+              maleActPath.transition().duration(750)
+                .attr("d", d3.line()
+                  .x(lineGenX)
+                  .y(d => yAct(d.avg))
+                  (currentMaleActData))
+                .style("opacity", 1);
+            } else {
+              maleActPath.transition().duration(750).style("opacity", 0);
+            }
+          }
+          
+          // Brush for zoom & correlation
+          var brush = d3.brushX()
+            .extent([[0,0],[width,height]])
+            .on("end", brushed);
+          var brushGroup = svg.append("g").attr("class", "brush").call(brush);
+          
+          function computeCorrelation(dataTemp, dataAct, x0, x1) {
+            var tempMap = new Map();
+            dataTemp.forEach(function(d) {
+              if (d.binAbs >= x0 && d.binAbs <= x1) {
+                tempMap.set(d.binAbs, d.avg);
+              }
+            });
+            var pairs = [];
+            dataAct.forEach(function(d) {
+              if (d.binAbs >= x0 && d.binAbs <= x1 && tempMap.has(d.binAbs)) {
+                pairs.push({ temp: tempMap.get(d.binAbs), act: d.avg });
+              }
+            });
+            if (pairs.length < 2) return null;
+            
+            var meanT = d3.mean(pairs, d => d.temp),
+                meanA = d3.mean(pairs, d => d.act);
+            var numerator = d3.sum(pairs, d => (d.temp - meanT)*(d.act - meanA));
+            var denominator = Math.sqrt(
+              d3.sum(pairs, d => Math.pow(d.temp - meanT, 2)) *
+              d3.sum(pairs, d => Math.pow(d.act - meanA, 2))
+            );
+            return (denominator === 0) ? 0 : numerator/denominator;
+          }
+          
+          function brushed() {
+            if (!d3.event.selection) return;
+            var s = d3.event.selection;
+            var newDomain = s.map(currentX.invert);
+            currentX.domain(newDomain);
+            xAxisG.transition().duration(750).call(xAxis.scale(currentX));
+            updateLines();
+            updateBackground();
+            brushGroup.call(brush.move, null);
+            
+            // correlation
+            if (showTempCheckbox.property("checked") && showActCheckbox.property("checked")) {
+              var femaleCorr = computeCorrelation(currentFemaleTempData, currentFemaleActData, newDomain[0], newDomain[1]);
+              var maleCorr   = computeCorrelation(currentMaleTempData,   currentMaleActData,   newDomain[0], newDomain[1]);
+              d3.select("#correlationResults").html(
+                "<strong>Correlation (Temperature vs Activity):</strong><br>" +
+                "Female: " + (femaleCorr!==null ? femaleCorr.toFixed(2) : "N/A") + "<br>" +
+                "Male: "   + (maleCorr!==null   ? maleCorr.toFixed(2)   : "N/A")
+              );
+            } else {
+              d3.select("#correlationResults").html("To compute correlation, both Temperature and Activity must be shown.");
+            }
+          }
+          
+          // Reset zoom
+          d3.select("#resetZoom").on("click", function() {
+            var selVal = cycleSelect.property("value");
+            if (selVal === "All") {
+              var maxCycle = d3.max(cycles);
+              xScaleOriginal.domain([0, maxCycle * cycleLength]);
+            } else {
+              var c = +selVal;
+              xScaleOriginal.domain([ (c-1)*cycleLength, c*cycleLength ]);
+            }
+            currentX = xScaleOriginal.copy();
+            xAxisG.transition().duration(750).call(xAxis.scale(currentX));
+            updateLines();
+            updateBackground();
+            d3.select("#correlationResults").html("");
+            brushGroup.call(brush.move, null);
+          });
+          
+          // Listen for changes
+          showTempCheckbox.on("change", updateChart);
+          showActCheckbox .on("change", updateChart);
+          femaleCheckbox  .on("change", updateChart);
+          maleCheckbox    .on("change", updateChart);
+          
+          cycleSelect.on("change", function() {
+            updateChart();
+            d3.select("#correlationResults").html("");
+            brushGroup.call(brush.move, null);
+          });
+          
+          // Initial draw
+          updateChart();
+          
+        }).catch(function(error) {
+          console.error("Error loading JSON data:", error);
+        });
+      });
+      </script>
 
-
-    <h1>Write Up</h1>
-    <p>Lorem ipsum dolor sit amet consectetur adipisicing elit. Molestias, rerum maxime? Illo cupiditate temporibus cum.
-        Natus repudiandae, sequi ducimus nihil ullam nostrum quisquam, doloribus, provident facilis nobis itaque veritatis quis? </p>
+  
+<h1>Write Up</h1>
+<p>Lorem ipsum dolor sit amet consectetur adipisicing elit. Molestias, rerum maxime? Illo cupiditate temporibus cum.
+    Natus repudiandae, sequi ducimus nihil ullam nostrum quisquam, doloribus, provident facilis nobis itaque veritatis quis? </p>
 
 </body>
 </html>
