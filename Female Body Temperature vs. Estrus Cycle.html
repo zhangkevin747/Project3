@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Female Body Temperature & Activity vs Estrus Cycle</title>
+  <title>Greatest Differences Between Temperature and Activity for Female Mice Occur During Estrus</title>
   <!-- Using D3 v5 -->
   <script src="https://d3js.org/d3.v5.min.js"></script>
   <style>
@@ -146,7 +146,7 @@
         .attr("text-anchor", "middle")
         .style("font-size", "18px")
         .style("font-weight", "bold")
-        .text("Female Estrus Cycle: Temperature & Activity");
+        .text("Greatest Differences Between Temperature and Activity for Female Mice Occur During Estrus");
       
       // Axes groups.
       var xAxisG = svg.append("g")
@@ -197,11 +197,11 @@
       // Draw data lines inside the clipped group.
       var femaleTempPath = linesGroup.append("path")
         .attr("fill", "none")
-        .attr("stroke", "blue")
+        .attr("stroke", "red")
         .attr("stroke-width", 2);
       var femaleActPath = linesGroup.append("path")
         .attr("fill", "none")
-        .attr("stroke", "blue")
+        .attr("stroke", "red")
         .attr("stroke-width", 2)
         .attr("stroke-dasharray", "4,4");
       
@@ -246,13 +246,13 @@
         .attr("alignment-baseline", "middle")
         .style("font-size", "12px");
       
-      // Line style legend for Temperature (solid blue line).
+      // Line style legend for Temperature (solid red line).
       legend.append("line")
         .attr("x1", 10)
         .attr("x2", 30)
         .attr("y1", 60)
         .attr("y2", 60)
-        .attr("stroke", "blue")
+        .attr("stroke", "red")
         .attr("stroke-width", 2);
       legend.append("text")
         .attr("x", 40)
@@ -261,13 +261,13 @@
         .style("font-size", "12px")
         .text("Temperature (Solid)");
       
-      // Line style legend for Activity (dotted blue line).
+      // Line style legend for Activity (dotted red line).
       legend.append("line")
         .attr("x1", 10)
         .attr("x2", 30)
         .attr("y1", 80)
         .attr("y2", 80)
-        .attr("stroke", "blue")
+        .attr("stroke", "red")
         .attr("stroke-width", 2)
         .attr("stroke-dasharray", "4,4");
       legend.append("text")
@@ -422,12 +422,12 @@
       var tempDot = svg.append("circle")
           .attr("class", "temp-dot")
           .attr("r", 5)
-          .attr("fill", "blue")
+          .attr("fill", "red")
           .style("display", "none");
       var actDot = svg.append("circle")
           .attr("class", "act-dot")
           .attr("r", 5)
-          .attr("fill", "blue")
+          .attr("fill", "red")
           .style("display", "none");
       
       // Overlay rectangle for capturing mouse events.
@@ -453,8 +453,8 @@
           });
       
       // Mousemove handler: update dots and tooltip with absolute difference in z-scores.
-      function mousemove(event) {
-          // Use d3.mouse(this) for D3 v5
+      function mousemove() {
+          var event = d3.event;
           var mousePos = d3.mouse(this);
           var x0 = currentX.invert(mousePos[0]);
           var bisect = d3.bisector(function(d) { return d.binAbs; }).left;
@@ -485,9 +485,9 @@
           
           // Update tooltip content and position next to the cursor.
           tooltip.style("opacity", 1)
-            .html("Abs Z Score Diff: " + absDiff.toFixed(2) +
-                  "<br>Temp Z: " + zTemp.toFixed(2) +
-                  "<br>Act Z: " + zAct.toFixed(2))
+            .html("Absolute Z Score Difference: " + absDiff.toFixed(2) +
+                  "<br>Temperature Z Score: " + zTemp.toFixed(2) +
+                  "<br>Activity Z Score: " + zAct.toFixed(2))
             .style("left", (event.pageX + 10) + "px")
             .style("top", (event.pageY + 10) + "px");
       }
@@ -526,6 +526,22 @@
       
       // Initial draw.
       updateChart();
+      
+      // Add subtitle at the bottom right of the graph.
+      svg.append("text")
+         .attr("x", width)
+         .attr("y", height + 50)
+         .attr("text-anchor", "end")
+         .style("fill", "gray")
+         .style("font-size", "12px")
+         .text("*Data aggregated from 13 female mice.");
+      svg.append("text")
+         .attr("x", width)
+         .attr("y", height + 70)
+         .attr("text-anchor", "end")
+         .style("fill", "gray")
+         .style("font-size", "12px")
+         .text("*Click to zoom in for more detail. ");
       
     }).catch(function(error) {
       console.error("Error loading JSON data:", error);
